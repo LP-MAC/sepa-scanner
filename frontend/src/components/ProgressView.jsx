@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { getScanStatus, cancelScan } from '../lib/api';
 
 export default function ProgressView({ jobId, onCancel, onComplete }) {
@@ -35,30 +35,63 @@ export default function ProgressView({ jobId, onCancel, onComplete }) {
     return () => clearInterval(interval);
   }, [jobId, onComplete, onCancel]);
 
-  const handleCancel = async () => { try { await cancelScan(jobId); } catch (e) {} onCancel(); };
+  const handleCancel = async () => {
+    try { await cancelScan(jobId); } catch (e) {}
+    onCancel();
+  };
 
-  const formatTime = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+  const formatTime = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
 
   if (status === 'failed') {
     return (
       <div className="bg-gray-800 rounded-lg p-6 text-center space-y-4">
-        <div className="text-red-400 text-lg">Scan Failed</div>
-        <div className="text-gray-400">{error}</div>
-        <button onClick={onCancel} className="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600">Try Again</button>
+        <div className="text-2xl">❌</div>
+        <div className="text-red-400 text-lg font-semibold">Scan Failed</div>
+        <div className="text-gray-400 text-sm">{error}</div>
+        <button onClick={onCancel} className="px-6 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 min-h-[44px]">Try Again</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6 space-y-4">
-      <h2 className="text-lg font-semibold">Scanning...</h2>
-      <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
-        <div className="h-full bg-blue-600 rounded-full transition-all duration-500 ease-out" style={{ width: `${progress}%` }}></div>
+    <div className="bg-gray-800 rounded-lg p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <h2 className="text-base sm:text-lg font-semibold text-center">Scanning...</h2>
+
+      {/* Current ticker — large and centered */}
+      {currentTicker && (
+        <div className="text-center">
+          <div className="text-xs text-gray-400 mb-1">Processing</div>
+          <div className="text-2xl sm:text-3xl font-bold font-mono text-blue-400">{currentTicker}</div>
+        </div>
+      )}
+
+      {/* Progress bar */}
+      <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+        <div
+          className="h-full bg-blue-600 rounded-full transition-all duration-500 ease-out"
+          style={{ width: `${progress}%` }}
+        ></div>
       </div>
-      <div className="flex justify-between text-sm"><span className="text-gray-400">{progress}%</span><span className="text-gray-400">{processed}/{total} tickers</span></div>
-      {currentTicker && <div className="text-sm text-gray-400">Processing: <span className="text-blue-400 font-mono">{currentTicker}</span></div>}
-      <div className="text-sm text-gray-500">Elapsed: {formatTime(elapsed)}</div>
-      <button onClick={handleCancel} className="px-4 py-2 bg-red-900 text-red-300 rounded hover:bg-red-800 text-sm">Cancel Scan</button>
+
+      <div className="flex justify-between text-sm">
+        <span className="text-gray-400 font-mono">{progress}%</span>
+        <span className="text-gray-400">{processed}/{total} tickers</span>
+      </div>
+
+      <div className="text-center text-sm text-gray-500">
+        ⏱ Elapsed: {formatTime(elapsed)}
+      </div>
+
+      <button
+        onClick={handleCancel}
+        className="w-full py-3 bg-red-900/60 text-red-300 rounded-lg hover:bg-red-800/60 active:bg-red-800 text-sm font-medium min-h-[44px] transition-colors"
+      >
+        Cancel Scan
+      </button>
     </div>
   );
 }

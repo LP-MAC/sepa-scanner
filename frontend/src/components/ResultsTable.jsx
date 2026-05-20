@@ -1,12 +1,15 @@
 import { useState, useMemo } from 'react';
-import { getChartUrl } from '../lib/api';
+import ResultsCard from './ResultsCard';
+import FiltersSheet from './FiltersSheet';
 import DetailPanel from './DetailPanel';
 
 export default function ResultsTable({ results, jobId, onNewScan }) {
-  const [filterTrend, setFilterTrend] = useState(true);
+  const [filterTrend, setFilterTrend] = useState(false);
   const [filterVCP, setFilterVCP] = useState(false);
   const [filterSector, setFilterSector] = useState('');
   const [selectedResult, setSelectedResult] = useState(null);
+  const [expandedMobileCard, setExpandedMobileCard] = useState(null);
+  const [showFilters, setShowFilters] = useState(false);
   const [sortKey, setSortKey] = useState('rs_rating');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -46,12 +49,28 @@ export default function ResultsTable({ results, jobId, onNewScan }) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sepa_scan_${jobId}.json`; a.click();
   };
 
+  // Try native share on mobile
+  const handleExport = async () => {
+    if (navigator.share) {
+      try {
+        const csv = ['ticker,price,rs_rating,trend_template_pass,vcp_detected',
+          ...filtered.map(r => [r.ticker,r.price,r.rs_rating,r.trend_template_pass,r.vcp_detected].join(','))
+        ].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const file = new File([blob], `sepa_scan_${jobId}.csv`, { type: 'text/csv' });
+        await navigator.share({ files: [file], title: 'SEPA Scan Results' });
+        return;
+      } catch (e) {}
+    }
+    // Fallback
+    exportCSV();
+  };
+
   const SortIcon = ({ col }) => {
     if (sortKey !== col) return <span className="text-gray-600 ml-1">⇅</span>;
     return <span className="text-blue-400 ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>;
   };
 
-  // Calculate SEPA grade for color coding
   const getGrade = (r) => {
     let score = 0;
     if (r.trend_template_pass) score += 30;
@@ -65,27 +84,81 @@ export default function ResultsTable({ results, jobId, onNewScan }) {
     return score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : 'D';
   };
 
+  const activeFilterCount = (filterTrend ? 1 : 0) + (filterVCP ? 1 : 0) + (filterSector ? 1 : 0);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Results: {filtered.length} of {results.length}</h2>
-        <div className="flex gap-2">
-          <button onClick={exportCSV} className="px-3 py-1 bg-gray-700 rounded text-sm hover:bg-gray-600">Export CSV</button>
-          <button onClick={exportJSON} className="px-3 py-1 bg-gray-700 rounded text-sm hover:bg-gray-600">Export JSON</button>
-          <button onClick={onNewScan} className="px-3 py-1 bg-blue-600 rounded text-sm hover:bg-blue-700">New Scan</button>
+    <div className="space-y-3 sm:space-y-4">
+      {/* Header with controls */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-base sm:text-lg font-semibold">
+          Results: <span className="text-blue-400">{filtered.length}</span> of {results.length}
+        </h2>
+        <div className="flex gap-1.5 sm:gap-2">
+          {/* Mobile: single Filter button */}
+          <button
+            onClick={() => setShowFilters(true)}
+            className="md:hidden px-3 py-2 bg-gray-700 rounded-lg text-xs hover:bg-gray-600 min-h-[36px] flex items-center gap-1"
+          >
+            Filters{activeFilterCount > 0 && ` (${activeFilterCount})`}
+          </button>
+          {/* Mobile: single Export button */}
+          <button
+            onClick={handleExport}
+            className="md:hidden px-3 py-2 bg-gray-700 rounded-lg text-xs hover:bg-gray-600 min-h-[36px]"
+          >
+            Export
+          </button>
+          {/* Desktop: separate buttons */}
+          <button onClick={exportCSV} className="hidden md:block px-3 py-1.5 bg-gray-700 rounded text-xs hover:bg-gray-600 min-h-[36px]">CSV</button>
+          <button onClick={exportJSON} className="hidden md:block px-3 py-1.5 bg-gray-700 rounded text-xs hover:bg-gray-600 min-h-[36px]">JSON</button>
+          <button onClick={onNewScan} className="px-3 py-1.5 sm:py-2 bg-blue-600 rounded-lg text-xs sm:text-sm font-medium hover:bg-blue-700 min-h-[36px] sm:min-h-[44px]">New Scan</button>
         </div>
       </div>
 
-      <div className="flex gap-4 flex-wrap">
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={filterTrend} onChange={e => setFilterTrend(e.target.checked)} />Trend Template passers</label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={filterVCP} onChange={e => setFilterVCP(e.target.checked)} />VCP only</label>
-        <select value={filterSector} onChange={e => setFilterSector(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
-          <option value="">All Sectors</option>
-          {sectors.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+      {/* Desktop filters — hidden on mobile */}
+      <div className="hidden md:flex gap-3 flex-wrap items-center">
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+          <input type="checkbox" checked={filterTrend} onChange={e => setFilterTrend(e.target.checked)} className="rounded" />
+          Trend passers
+        </label>
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+          <input type="checkbox" checked={filterVCP} onChange={e => setFilterVCP(e.target.checked)} className="rounded" />
+          VCP only
+        </label>
+        {sectors.length > 0 && (
+          <select
+            value={filterSector}
+            onChange={e => setFilterSector(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
+          >
+            <option value="">All Sectors</option>
+            {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Mobile: Card list */}
+      <div className="md:hidden space-y-2">
+        {filtered.map(r => (
+          <ResultsCard
+            key={r.ticker}
+            result={r}
+            jobId={jobId}
+            isExpanded={expandedMobileCard === r.ticker}
+            onToggle={() => setExpandedMobileCard(expandedMobileCard === r.ticker ? null : r.ticker)}
+          />
+        ))}
+        {filtered.length === 0 && (
+          <div className="text-center text-gray-500 py-12">
+            <div className="text-3xl mb-2">🔍</div>
+            <div>No results match filters</div>
+            <button onClick={() => { setFilterTrend(false); setFilterVCP(false); setFilterSector(''); }} className="text-blue-400 text-sm mt-2 underline">Clear filters</button>
+          </div>
+        )}
+      </div>
+
+      {/* Desktop: Table */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-700 text-gray-400">
@@ -104,70 +177,52 @@ export default function ResultsTable({ results, jobId, onNewScan }) {
           <tbody>
             {filtered.map((r, idx) => {
               const grade = getGrade(r);
-              const gradeBg = grade === 'A' ? 'bg-green-900/30' : 
-                              grade === 'B' ? 'bg-blue-900/30' : 
-                              grade === 'C' ? 'bg-yellow-900/30' : 'bg-red-900/30';
-              const gradeText = grade === 'A' ? 'text-green-400' : 
-                               grade === 'B' ? 'text-blue-400' : 
-                               grade === 'C' ? 'text-yellow-400' : 'text-red-400';
+              const gradeBg = grade === 'A' ? 'bg-green-900/30' : grade === 'B' ? 'bg-blue-900/30' : grade === 'C' ? 'bg-yellow-900/30' : 'bg-red-900/30';
+              const gradeText = grade === 'A' ? 'text-green-400' : grade === 'B' ? 'text-blue-400' : grade === 'C' ? 'text-yellow-400' : 'text-red-400';
               const isSelected = selectedResult?.ticker === r.ticker;
-              
               return (
-                <tr 
-                  key={r.ticker} 
-                  onClick={() => setSelectedResult(isSelected ? null : r)}
-                  className={`border-b border-gray-800 cursor-pointer transition-colors ${
-                    isSelected ? 'bg-blue-900/20 border-l-2 border-l-blue-500' : 'hover:bg-gray-800'
-                  }`}
-                >
+                <tr key={r.ticker} onClick={() => setSelectedResult(isSelected ? null : r)}
+                  className={`border-b border-gray-800 cursor-pointer transition-colors ${isSelected ? 'bg-blue-900/20 border-l-2 border-l-blue-500' : 'hover:bg-gray-800'}`}>
                   <td className="p-2 text-center text-gray-500 text-xs">{idx + 1}</td>
-                  <td className="p-2">
-                    <span className="font-mono text-blue-400 font-semibold">{r.ticker}</span>
-                    <div className="text-gray-500 text-xs md:hidden">{r.name}</div>
-                  </td>
+                  <td className="p-2"><span className="font-mono text-blue-400 font-semibold">{r.ticker}</span><div className="text-gray-500 text-xs">{r.name}</div></td>
                   <td className="p-2 text-right font-mono">{r.price?.toFixed(2)}</td>
                   <td className="p-2 text-right font-mono font-semibold text-blue-400">{r.rs_rating?.toFixed(1)}</td>
                   <td className="p-2 text-center">{r.trend_template_pass ? '✅' : '❌'}</td>
                   <td className="p-2 text-center">{r.vcp_detected ? '✅' : '—'}</td>
                   <td className="p-2 text-center font-mono">{r.num_contractions || '—'}</td>
-                  <td className={`p-2 text-right font-mono font-semibold ${
-                    (r.distance_from_pivot_pct || 0) < 0 ? 'text-green-400' : 
-                    (r.distance_from_pivot_pct || 0) < 5 ? 'text-yellow-400' : 'text-red-400'
-                  }`}>
-                    {r.distance_from_pivot_pct != null ? `${r.distance_from_pivot_pct.toFixed(1)}%` : '—'}
-                  </td>
+                  <td className={`p-2 text-right font-mono font-semibold ${(r.distance_from_pivot_pct||0) < 0 ? 'text-green-400' : (r.distance_from_pivot_pct||0) < 5 ? 'text-yellow-400' : 'text-red-400'}`}>{r.distance_from_pivot_pct != null ? `${r.distance_from_pivot_pct.toFixed(1)}%` : '—'}</td>
                   <td className="p-2 text-center">{r.pocket_pivot ? '🔥' : '—'}</td>
-                  <td className="p-2 text-center">
-                    <span className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${gradeBg} ${gradeText}`}>
-                      {grade}
-                    </span>
-                  </td>
+                  <td className="p-2 text-center"><span className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${gradeBg} ${gradeText}`}>{grade}</span></td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        {filtered.length === 0 && <div className="text-center text-gray-500 py-8">No results match filters</div>}
       </div>
 
-      {filtered.length === 0 && (
-        <div className="text-center text-gray-500 py-8">No results match filters</div>
-      )}
-
-      {/* Detail Panel */}
+      {/* Detail Panel (desktop only) */}
       {selectedResult && (
         <>
-          {/* Overlay */}
-          <div 
-            className="fixed inset-0 bg-black/50 z-40"
-            onClick={() => setSelectedResult(null)}
-          />
-          <DetailPanel 
-            result={selectedResult} 
-            jobId={jobId}
-            onClose={() => setSelectedResult(null)}
-          />
+          <div className="fixed inset-0 bg-black/50 z-40 hidden md:block" onClick={() => setSelectedResult(null)} />
+          <DetailPanel result={selectedResult} jobId={jobId} onClose={() => setSelectedResult(null)} />
         </>
       )}
+
+      {/* Mobile Filters Sheet */}
+      <FiltersSheet
+        isOpen={showFilters}
+        onClose={() => setShowFilters(false)}
+        filterTrend={filterTrend}
+        setFilterTrend={setFilterTrend}
+        filterVCP={filterVCP}
+        setFilterVCP={setFilterVCP}
+        filterSector={filterSector}
+        setFilterSector={setFilterSector}
+        sectors={sectors}
+        sortKey={sortKey}
+        setSortKey={setSortKey}
+      />
     </div>
   );
 }

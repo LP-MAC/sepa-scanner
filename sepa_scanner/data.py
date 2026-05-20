@@ -2,59 +2,67 @@
 yfinance data fetcher with disk caching via parquet and exponential backoff retry.
 """
 import logging
+import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-import os
 import yfinance as yf
-from pytz import timezone as tz
+from zoneinfo import ZoneInfo
 
 from sepa_scanner.config import config
 
 logger = logging.getLogger(__name__)
 
-EASTERN = tz("US/Eastern")
-
+EASTERN = ZoneInfo("America/New_York")
+_fetch_lock = threading.Lock()
 _last_fetch_time: float = 0.0
 
 
 def _rate_limit():
-    """Enforce minimum delay between yfinance calls."""
+    """Thread-safe enforcement of minimum delay between yfinance calls."""
     global _last_fetch_time
-    elapsed = time.monotonic() - _last_fetch_time
-    if elapsed < config.rate_limit_delay:
-        time.sleep(config.rate_limit_delay - elapsed)
-    _last_fetch_time = time.monotonic()
+    with _fetch_lock:
+        elapsed = time.monotonic() - _last_fetch_time
+        if elapsed < config.rate_limit_delay:
+            time.sleep(config.rate_limit_delay - elapsed)
+        _last_fetch_time = time.monotonic()
+
+
+def _last_trading_close(now: datetime) -> datetime:
+    """Given now, return the datetime of the most recent market close (4 PM ET)."""
+    close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    # If it's before 4 PM, the last close was yesterday (or Friday if Monday)
+    if now < close:
+        close -= timedelta(days=1)
+    # Walk back over weekends
+    while close.weekday() >= 5:  # Sat=5, Sun=6
+        close -= timedelta(days=1)
+    return close
 
 
 def _is_cache_valid(cache_path: Path) -> bool:
-    """Cache is valid if the file exists and was written after today's market close."""
+    """Cache is valid if written after the most recent market close."""
     if not cache_path.exists():
         return False
-
     now = datetime.now(EASTERN)
-    market_close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    if now < market_close_today:
-        return True
-
+    last_close = _last_trading_close(now)
     mtime = datetime.fromtimestamp(cache_path.stat().st_mtime, tz=EASTERN)
-    return mtime >= market_close_today
+    return mtime >= last_close
 
 
 def _cache_path(ticker: str) -> Path:
     """Generate cache file path for a ticker."""
     safe_ticker = ticker.replace(".", "_").replace("/", "_")
-    return config.cache_dir / f"{safe_ticker}.csv"
+    return config.cache_dir / f"{safe_ticker}.parquet"
 
 
 def _save_cache(ticker: str, df: pd.DataFrame):
     """Write dataframe to parquet cache."""
     path = _cache_path(ticker)
-    df.to_csv(path, index=True)
+    df.to_parquet(path, index=True)
     logger.debug(f"Cached {ticker} -> {path}")
 
 
@@ -63,7 +71,7 @@ def _load_cache(ticker: str) -> Optional[pd.DataFrame]:
     path = _cache_path(ticker)
     if _is_cache_valid(path):
         try:
-            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            df = pd.read_parquet(path)
             logger.debug(f"Cache hit: {ticker}")
             return df
         except Exception as e:
@@ -105,10 +113,14 @@ def fetch_ticker_data(ticker: str, no_cache: bool = False) -> Optional[pd.DataFr
             _save_cache(ticker, df)
             return df
 
-        except Exception as e:
+        except (yf.exceptions.YFRateLimitError, yf.exceptions.YFNotImplementedError):
             wait = config.retry_backoff_base ** attempt
-            logger.debug(f"{ticker}: attempt {attempt + 1} failed ({e}), retrying in {wait}s")
+            logger.warning(f"{ticker}: yfinance error on attempt {attempt + 1}, retrying in {wait}s")
             time.sleep(wait)
+        except Exception as e:
+            # Data-shape errors don't benefit from retries; fail fast
+            logger.warning(f"{ticker}: non-retryable error: {e}")
+            return None
 
     logger.warning(f"{ticker}: all {config.max_retries} fetch attempts failed")
     return None

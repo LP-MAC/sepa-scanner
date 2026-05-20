@@ -13,7 +13,7 @@ from sepa_scanner.data import fetch_universe_data
 from sepa_scanner.universe import build_universe, filter_by_dollar_volume
 from sepa_scanner.rs_rating import compute_rs_ratings
 from sepa_scanner.trend_template import evaluate_trend_template
-from sepa_scanner.vcp import detect_vcp
+from sepa_scanner.vcp import detect_vcp, VCPResult
 from sepa_scanner.regime import SpyRegimeFilter
 from sepa_scanner.pocket_pivot import detect_pocket_pivot
 from sepa_scanner.output import _flatten_results, write_csv, write_json
@@ -30,7 +30,7 @@ def setup_logging(verbose: bool = False):
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    config.ensure_dirs()
     fh = logging.FileHandler(config.log_file)
     fh.setLevel(level)
     fh.setFormatter(formatter)
@@ -56,12 +56,22 @@ def parse_args():
     parser.add_argument("--plot", action="store_true", default=False)
     parser.add_argument("--no-cache", action="store_true", default=False)
     parser.add_argument("--verbose", action="store_true", default=False)
+    parser.add_argument("--backtest", action="store_true", default=False)
+    parser.add_argument("--start", type=str, default=None, help="Backtest start (YYYY-MM-DD)")
+    parser.add_argument("--end", type=str, default=None, help="Backtest end (YYYY-MM-DD)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     setup_logging(args.verbose)
+
+    if args.backtest:
+        logger.error("Backtest mode not yet implemented")
+        raise NotImplementedError(
+            "Backtest mode is not yet implemented. "
+            "It requires storing historical snapshots of price data for each scan date."
+        )
 
     if args.rs_threshold is not None:
         config.rs_threshold = args.rs_threshold
@@ -80,11 +90,16 @@ def main():
     data = fetch_universe_data(tickers, no_cache=args.no_cache)
     logger.info(f"Phase 2 - Data Fetch: {len(data)} tickers in {time.time() - t0:.1f}s")
 
+    if not data:
+        logger.error("No data fetched — yfinance may be unavailable or all tickers failed")
+        sys.exit(1)
+
     qualifying = filter_by_dollar_volume(data, config.min_dollar_volume)
     data = {t: data[t] for t in qualifying}
 
+    # Pass SPY to regime filter if already in data (avoids double-fetch)
     t0 = time.time()
-    regime = SpyRegimeFilter()
+    regime = SpyRegimeFilter(data=data.get("SPY"))
     is_bullish = regime.is_bullish_regime()
     logger.info(f"Phase 3 - Regime: bullish={is_bullish} in {time.time() - t0:.1f}s")
 
@@ -100,12 +115,18 @@ def main():
     trend_passes = sum(1 for r in trend_results.values() if r.passes_all)
     logger.info(f"Phase 5 - Trend Template: {trend_passes} pass in {time.time() - t0:.1f}s")
 
+    # VCP only on Trend Template passers (Minervini spec: VCP is only meaningful in uptrends)
     t0 = time.time()
     vcp_results = {}
-    for ticker in data:
+    vcp_passers = [t for t in data if trend_results[t].passes_all]
+    for ticker in vcp_passers:
         vcp_results[ticker] = detect_vcp(ticker, data[ticker])
+    # Non-passers get empty VCP result
+    for ticker in data:
+        if ticker not in vcp_results:
+            vcp_results[ticker] = VCPResult(ticker=ticker)
     vcp_count = sum(1 for r in vcp_results.values() if r.vcp_detected)
-    logger.info(f"Phase 6 - VCP: {vcp_count} detected in {time.time() - t0:.1f}s")
+    logger.info(f"Phase 6 - VCP: {vcp_count} detected (on {len(vcp_passers)} Trend passers) in {time.time() - t0:.1f}s")
 
     pocket_pivots = {}
     for ticker, df in data.items():

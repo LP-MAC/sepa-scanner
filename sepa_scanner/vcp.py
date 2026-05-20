@@ -39,7 +39,7 @@ class VCPResult:
     distance_from_pivot_pct: float = 0.0
     volume_dryup_score: float = 0.0
     is_final_contraction_ideal: bool = False
-    pocket_pivot: bool = False
+    # pocket_pivot removed — it belongs in pocket_pivot.py output, not VCP
 
 
 def _find_swings(
@@ -107,44 +107,61 @@ def _detect_vcp(ticker: str, df: pd.DataFrame) -> VCPResult:
 
     best_sequence: List[ContractionLeg] = []
 
+    # Only consider sequences whose LAST contraction is recent (last ~40 trading days).
+    # A "VCP" with old contractions is a historical pattern, not an actionable setup.
+    recent_cutoff = df_window.index[-1] - pd.Timedelta(days=60)
+
+
     for start in range(len(legs) - config.vcp_min_contractions + 1):
         sequence = [legs[start]]
         for i in range(start + 1, len(legs)):
             prev = sequence[-1]
             curr = legs[i]
 
+            # Each contraction must be shallower by at least shallower_margin
+            # vcp_shallower_margin=0.25 means each contraction is ≥25% shallower than previous
             shallower_threshold = prev.depth_pct * (1 - config.vcp_shallower_margin)
             if curr.depth_pct > shallower_threshold:
                 continue
 
+            # Lows must be higher
             if curr.low_price <= prev.low_price:
                 continue
 
-            if curr.avg_volume > prev.avg_volume * 1.2:
+            # Volume comparison: use volume RATIO to 50-day avg, not raw volume.
+            # This normalizes for changing overall market volume conditions.
+            if curr.avg_volume_ratio_to_50d > prev.avg_volume_ratio_to_50d * 1.2:
                 continue
 
             sequence.append(curr)
 
-        if len(sequence) >= config.vcp_min_contractions and len(sequence) > len(best_sequence):
+        # Require the last contraction in the sequence to be recent
+        if (len(sequence) >= config.vcp_min_contractions
+                and sequence[-1].low_date >= recent_cutoff
+                and len(sequence) > len(best_sequence)):
             best_sequence = sequence
 
     if len(best_sequence) < config.vcp_min_contractions:
         return VCPResult(ticker=ticker)
 
+    # Limit to max contractions (keep most recent)
     if len(best_sequence) > config.vcp_max_contractions:
         best_sequence = best_sequence[-config.vcp_max_contractions:]
 
+    # --- Pivot calculation (FIXED) ---
+    # Minervini's pivot = the high of the most recent contraction (the resistance to break).
+    # The last swing high in the sequence IS the breakout level the stock needs to clear.
+    # Using post-breakout highs would give nonsensical distance-from-pivot values.
     last_leg = best_sequence[-1]
-    after_low = df_window.loc[last_leg.low_date:]["high"]
-    if len(after_low) > 0:
-        pivot_price = after_low.max()
-        pivot_date = after_low.idxmax()
-    else:
-        pivot_price = last_leg.high_price
-        pivot_date = last_leg.high_date
+    pivot_price = last_leg.high_price
+    pivot_date = last_leg.high_date
 
     current_price = df_window["close"].iloc[-1]
     distance_pct = ((current_price - pivot_price) / pivot_price) * 100 if pivot_price > 0 else 0
+
+    # VCP is a PRE-breakout setup. If price is already >3% above pivot, it's extended, not a setup.
+    if distance_pct > 3.0:
+        return VCPResult(ticker=ticker)
 
     first_vol_ratio = best_sequence[0].avg_volume_ratio_to_50d
     last_vol_ratio = best_sequence[-1].avg_volume_ratio_to_50d
@@ -153,8 +170,14 @@ def _detect_vcp(ticker: str, df: pd.DataFrame) -> VCPResult:
     else:
         volume_score = 0.0
 
+    # Check if final contraction is ideal (depth < 8%)
     final_depth = best_sequence[-1].depth_pct
     is_ideal = final_depth <= config.vcp_ideal_final_max_depth * 100
+
+    # Also enforce the "hard" max depth if configured
+    if config.vcp_final_max_depth > 0 and final_depth > config.vcp_final_max_depth * 100:
+        # Final contraction too deep — not a valid VCP
+        return VCPResult(ticker=ticker)
 
     return VCPResult(
         ticker=ticker,

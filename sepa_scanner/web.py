@@ -24,7 +24,7 @@ from sepa_scanner.data import fetch_universe_data
 from sepa_scanner.universe import build_universe, filter_by_dollar_volume
 from sepa_scanner.rs_rating import compute_rs_ratings
 from sepa_scanner.trend_template import evaluate_trend_template
-from sepa_scanner.vcp import detect_vcp
+from sepa_scanner.vcp import detect_vcp, VCPResult
 from sepa_scanner.regime import SpyRegimeFilter
 from sepa_scanner.pocket_pivot import detect_pocket_pivot
 from sepa_scanner.output import _flatten_results, ScanResult
@@ -169,9 +169,16 @@ def _run_scan(job_id: str, req: ScanRequest):
 
         job_store.update(job_id, progress=55, current_ticker="Detecting VCP patterns...")
         vcp_results = {}
-        for i, ticker in enumerate(data):
-            df = data[ticker]
-            vcp_results[ticker] = detect_vcp(ticker, df)
+        vcp_passers = [t for t in data if trend_results.get(t, VCPResult(ticker="")).passes_all] if trend_results else []
+        job_store.update(job_id, progress=55, current_ticker="Detecting VCP patterns...")
+        for i, ticker in enumerate(vcp_passers):
+            vcp_results[ticker] = detect_vcp(ticker, data[ticker])
+            if i % 10 == 0 and len(vcp_passers) > 0:
+                progress = 55 + int((i / len(vcp_passers)) * 25)
+                job_store.update(job_id, progress=progress, current_ticker=ticker)
+        for ticker in data:
+            if ticker not in vcp_results:
+                vcp_results[ticker] = VCPResult(ticker=ticker)
             if i % 10 == 0 and total > 0:
                 progress = 55 + int((i / max(len(data), 1)) * 25)
                 job_store.update(job_id, progress=progress, current_ticker=ticker)

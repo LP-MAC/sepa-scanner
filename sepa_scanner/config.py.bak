@@ -26,7 +26,7 @@ class ScannerConfig:
     vcp_lookback_days: int = 120  # trading days to scan for swing points
     vcp_swing_distance: int = 10  # minimum days between swing points (find_peaks 'distance')
     vcp_swing_prominence: float = 0.03  # minimum prominence as fraction of price (3%)
-    vcp_min_contractions: int = 3  # minimum contraction legs to qualify
+    vcp_min_contractions: int = 2  # minimum contraction legs to qualify
     vcp_max_contractions: int = 6  # maximum contractions
     vcp_shallower_margin: float = 0.25  # each contraction must be at least 25% shallower than previous
     vcp_final_max_depth: float = 0.10  # final contraction must be < 10% deep (hard filter)
