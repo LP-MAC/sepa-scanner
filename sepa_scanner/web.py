@@ -20,6 +20,7 @@ from slowapi.util import get_remote_address
 
 from sepa_scanner import __version__
 from sepa_scanner.config import config
+config.ensure_dirs()  # Must run before any scan writes to cache
 from sepa_scanner.data import fetch_universe_data
 from sepa_scanner.universe import build_universe, filter_by_dollar_volume
 from sepa_scanner.rs_rating import compute_rs_ratings
