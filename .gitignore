@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+output/cache/
+output/charts/
+output/scan*.csv
+output/scan*.json
+output/scan.log
+node_modules/
+frontend/dist/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
